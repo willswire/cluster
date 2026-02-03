@@ -53,7 +53,7 @@ enum ClusterKernel {
             size.intValue > 0
         {
             if debug {
-                log.debug("Cluster kernel cached at \(cachedKernel.path)")
+                log.debug("Cluster kernel cached: \(cachedKernel.path)")
             }
             return cachedKernel.path
         }
@@ -75,7 +75,7 @@ enum ClusterKernel {
         try FileManager.default.moveItem(at: extracted, to: cachedKernel)
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: cachedKernel.path)
         if debug {
-            log.debug("Cluster kernel cached at \(cachedKernel.path)")
+            log.debug("Cluster kernel cached: \(cachedKernel.path)")
         }
         return cachedKernel.path
     }
