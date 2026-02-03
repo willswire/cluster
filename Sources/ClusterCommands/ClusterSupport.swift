@@ -15,6 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 import ContainerAPIClient
+import ContainerizationArchive
 import ContainerizationError
 import Foundation
 import Logging
@@ -26,6 +27,90 @@ enum ClusterDefaults {
     static let cpus: Int64 = 6
     static let podCIDR = "10.244.0.0/16"
     static let apiPort: UInt16 = 6443
+}
+
+enum ClusterKernel {
+    private static let kernelArchiveURL = URL(
+        string:
+            "https://github.com/willswire/kernel/releases/download/containerization-c3fe889a2f739ee4a9b0faccedd9f36f3862dc29/kernel-c3fe889a2f739ee4a9b0faccedd9f36f3862dc29.tar.zst"
+    )!
+    private static let kernelArchivePath = "vmlinux"
+
+    static func resolveKernelPath(explicitPath: String?, log: Logger, debug: Bool) async throws -> String? {
+        if let explicitPath {
+            return expandTilde(explicitPath).path
+        }
+        return try await ensureKernelCached(log: log, debug: debug)
+    }
+
+    private static func ensureKernelCached(log: Logger, debug: Bool) async throws -> String {
+        let cacheDir = try kernelCacheDirectory()
+        let archiveDir = cacheDir.appendingPathComponent(kernelArchiveURL.lastPathComponent, isDirectory: true)
+        let cachedKernel = archiveDir.appendingPathComponent(kernelArchivePath)
+
+        if let existing = try? FileManager.default.attributesOfItem(atPath: cachedKernel.path),
+            let size = existing[.size] as? NSNumber,
+            size.intValue > 0
+        {
+            if debug {
+                log.debug("Cluster kernel cached at \(cachedKernel.path)")
+            }
+            return cachedKernel.path
+        }
+
+        try FileManager.default.createDirectory(at: archiveDir, withIntermediateDirectories: true, attributes: nil)
+        if !debug {
+            print("Fetching cluster kernel...")
+        }
+
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true, attributes: nil)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let tempArchive = tempDir.appendingPathComponent(kernelArchiveURL.lastPathComponent)
+        try await downloadFileFollowingRedirects(from: kernelArchiveURL, to: tempArchive)
+        let extracted = try extractKernel(from: tempArchive, kernelPath: kernelArchivePath, to: tempDir)
+
+        try? FileManager.default.removeItem(at: cachedKernel)
+        try FileManager.default.moveItem(at: extracted, to: cachedKernel)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: cachedKernel.path)
+        if debug {
+            log.debug("Cluster kernel cached at \(cachedKernel.path)")
+        }
+        return cachedKernel.path
+    }
+
+    private static func kernelCacheDirectory() throws -> URL {
+        let base =
+            FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Caches", isDirectory: true)
+        let cacheDir = base.appendingPathComponent("cluster", isDirectory: true)
+            .appendingPathComponent("kernels", isDirectory: true)
+        try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true, attributes: nil)
+        return cacheDir
+    }
+
+    private static func downloadFileFollowingRedirects(from url: URL, to destination: URL) async throws {
+        let (tempURL, response) = try await URLSession.shared.download(from: url)
+        if let httpResponse = response as? HTTPURLResponse {
+            guard (200...299).contains(httpResponse.statusCode) else {
+                throw ContainerizationError(.internalError, message: "failed to download kernel archive: HTTP \(httpResponse.statusCode)")
+            }
+        }
+        try? FileManager.default.removeItem(at: destination)
+        try FileManager.default.moveItem(at: tempURL, to: destination)
+    }
+
+    private static func extractKernel(from tarFile: URL, kernelPath: String, to directory: URL) throws -> URL {
+        let archiveReader = try ArchiveReader(file: tarFile)
+        let (entry, data) = try archiveReader.extractFile(path: kernelPath)
+        guard entry.fileType == .regular else {
+            throw ContainerizationError(.internalError, message: "kernel \(kernelPath) is not a regular file in archive")
+        }
+        let outputURL = directory.appendingPathComponent(URL(fileURLWithPath: kernelPath).lastPathComponent)
+        try data.write(to: outputURL, options: .atomic)
+        return outputURL
+    }
 }
 
 struct ClusterSpec: Sendable {

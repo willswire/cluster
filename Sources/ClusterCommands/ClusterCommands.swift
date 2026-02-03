@@ -74,6 +74,11 @@ public struct ClusterCreate: ClusterLoggableCommand {
     var replace = false
 
     public func run() async throws {
+        let resolvedKernel = try await ClusterKernel.resolveKernelPath(
+            explicitPath: kernel,
+            log: log,
+            debug: logOptions.debug
+        )
         let spec = try ClusterSpec(
             name: name,
             image: image,
@@ -81,7 +86,7 @@ public struct ClusterCreate: ClusterLoggableCommand {
             memory: memory,
             podCIDR: podCIDR,
             apiPort: apiPort,
-            kernelPath: kernel,
+            kernelPath: resolvedKernel,
             kubeconfigPath: kubeconfig
         )
 
